@@ -3,10 +3,10 @@
 from PyQt5 import QtCore, QtGui, QtWidgets
 import sys
 import os
-from PyQt5.Qt import *
-from PyQt5.QtWebEngineWidgets import *
+from PyQt5.Qt import QLabel, QPushButton, QWidget, pyqtSlot, QUrl, QMainWindow, QGridLayout, QInputDialog
+from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineView
 from PyQt5.QtWidgets import QApplication
-from PyQt5 import uic
+# from PyQt5 import uic
 from PyQt5 import QtWidgets
 from time import sleep
 import sip
@@ -23,6 +23,7 @@ class Tag(QWidget):
         super().__init__()
         self.initUi()
         self.is_deleted = False
+        self.update_site_name()
 
     def initUi(self):
         self.gridLayout = QGridLayout()
@@ -48,13 +49,18 @@ class Tag(QWidget):
             """)
 
     def update_site_name(self):
-        if 'https://www' in self.url:
-            self.site_name = self.url[12:][:self.url[12:].find('.')]
-            # print(self.site_name, self.url[12:], self.url, self.url[12:].find('.'))
-        elif 'https://' in self.url:
-            self.site_name = self.url[8:][:self.url[8:].find('.')]
-        else:
-            self.site_name = self.url[:self.url.find('.')]
+        try:
+            if 'https://www' in self.url:
+                self.site_name = self.url.split('/')[2].split('.')[-2]
+                # print(self.site_name)
+                # print(self.site_name, self.url[12:], self.url, self.url[12:].find('.'))
+            elif 'https://' in self.url:
+                self.site_name = self.url.split('/')[2].split('.')[-2]
+                # print(self.site_name)
+            else:
+                self.site_name = self.url.split('/')[0].split('.')[-2]
+        except Exception:
+            self.site_name = self.url
         self.tag_body.setText(self.site_name)
 
 
@@ -76,6 +82,7 @@ class Master_Tag(QWidget):
         self.tag_body = QPushButton(self.name, self)
         # self.tag_body.resize(250, 40)
         self.del_btn = QPushButton('x', self)
+
         # self.del_btn.resize(26, 26)
         # self.del_btn.move(215, 7)
         self.gridLayout.addWidget(self.tag_body, 0, 0, 1, 5)  # row column row_span column_span
@@ -119,6 +126,9 @@ class Ui_MainWindow(object):
         self.web = QWebEngineView()
         self.web.setObjectName("web")
         self.gridLayout.addWidget(self.web, 4, 0, 155, 18)
+        self.add = QLabel('Автору на печеньки: https://yoomoney.ru/to/410018466402473/200')
+        # self.add.enable
+        self.gridLayout.addWidget(self.add, 200, 0, 1, 18)
         MainWindow.setCentralWidget(self.centralwidget)
 
         # self.btn = QPushButton()
@@ -172,17 +182,15 @@ class MyWidget(QMainWindow, Ui_MainWindow):
 
         super().__init__()
         self.setupUi(self)
-
-
         self.setGeometry(1, 1, 1, 1)
         self.start_browser()
 
     def start_browser(self):
-        # print('start')
-        self.con = sqlite3.connect('BrowserDB.db')
+        self.con = sqlite3.connect('BrowserDB.db', isolation_level=None)
         self.cur = self.con.cursor()
-        # self.clear_db()
+        self.clear_db()
         self.master_tags = self.import_tags()
+        # print(self.master_tags[self.current_master_index].tags[self.current_tag_index].url)
         self.make_master_tags()
         self.make_all_tags()
         self.hide_all_tags()
@@ -194,24 +202,26 @@ class MyWidget(QMainWindow, Ui_MainWindow):
         self.web.urlChanged.connect(self.change_url_line)
         self.undo.pressed.connect(self.undo_func)
         self.forward.pressed.connect(self.forward_func)
-        # print('end')
 
     def clear_db(self):
-        self.cur.execute("DELETE FROM Tags WHERE is_deleted=True")
-        self.cur.execute("DELETE FROM Masters WHERE is_deleted=True")
+        self.cur.execute("DELETE FROM Tags WHERE is_deleted=1")
+        self.cur.execute("DELETE FROM Masters WHERE is_deleted=1")
+        self.con.commit()
 
     def import_tags(self):
         master_tags = []
         data = self.cur.execute("SELECT title, tags, id FROM Masters").fetchall()
         for elem in data:
             tags = []
-            for tag_id in elem[1].split(';'):
+            # print(elem[1])
+            for tag_id in str(elem[1]).split(';'):
                 tag_data = self.cur.execute("SELECT url, id FROM Tags WHERE id=?", (tag_id,)).fetchall()
-                # print(tag_data)
-                tags.append(Tag(tag_data[0][0], tag_data[0][1]))
-            master_tags.append(Master_Tag(elem[0], tags, elem[2]))
+                if tag_data != []:
+                    tags.append(Tag(tag_data[0][0], tag_data[0][1]))
+            # print(elem[0])
+            master_tags.append(Master_Tag(str(elem[0]), tags, elem[2]))
+            # master_tags[-1].index_in_db = elem[2]
         return master_tags
-
 
     def make_master_tags(self):
         for i in range(len(self.master_tags)):  # создаем все мастер-теги в дизайне
@@ -221,33 +231,111 @@ class MyWidget(QMainWindow, Ui_MainWindow):
             self.master_tags[i].tag_body.index = i
             self.master_tags[i].del_btn.index = i
 
+        not_deleted_num = sum([0 if i.is_deleted else 1 for i in self.master_tags])
+        if not_deleted_num < self.max_tag_count:
+            try:
+                self.add_master_btn.hide()
+            except Exception:
+                pass
+            self.add_master_btn = QPushButton('+')
+            self.gridLayout.addWidget(self.add_master_btn, 0, 2 * not_deleted_num, 1, 1)
+            self.add_master_btn.pressed.connect(self.create_master)
+
+    def create_master(self):
+        name, ok_pressed = QInputDialog.getText(self, 'Новая мастер-вкладка', 'Название новой вкладки:')
+        if ok_pressed:
+            new_id = int(self.cur.execute("SELECT id FROM max_master").fetchall()[0][0]) + 1
+            new_tag_id = int(self.cur.execute("SELECT id FROM max_id").fetchall()[0][0]) + 1
+
+            self.cur.execute("UPDATE max_master SET id=?", (new_id,))
+            self.cur.execute("UPDATE max_id SET id=?", (new_tag_id,))
+            self.con.commit()
+            new_tag = Tag('google.com', new_tag_id)
+            self.master_tags.append(Master_Tag(name, [new_tag], new_id))
+            self.gridLayout.addWidget(new_tag, 1, 0, 1, 2)
+            new_tag.hide()
+            not_deleted_num = sum([0 if i.is_deleted else 1 for i in self.master_tags])
+            # print(self.master_tags[-1])
+            self.gridLayout.addWidget(self.master_tags[-1], 0, 2 * (not_deleted_num - 1), 1, 2)
+            # self.master_tags[len(self.master_tags) - 1].show()
+            self.master_tags[len(self.master_tags) - 1].tag_body.pressed.connect(self.change_master)
+            self.master_tags[len(self.master_tags) - 1].del_btn.pressed.connect(self.delete_master)
+            self.master_tags[len(self.master_tags) - 1].tag_body.index = len(self.master_tags) - 1
+            self.master_tags[len(self.master_tags) - 1].del_btn.index = len(self.master_tags) - 1
+            # print('hello')
+            # print(new_tag_id, new_id)
+            # print(self.cur.execute("SELECT * FROM Tags WHERE id=?", (new_tag_id, )).fetchall())
+            self.cur.execute("INSERT INTO Tags VALUES (?, 'google.com', 0)", (new_tag_id,))
+            # print('tags ready')
+            self.cur.execute("INSERT INTO Masters VALUES (?, ?, 0, ?)", (new_id, name, str(new_tag_id)))
+
+            self.current_master_index = not_deleted_num - 1
+            self.current_tag_index = 0
+            self.add_master_btn.hide()
+            if not_deleted_num < self.max_tag_count:
+                self.add_master_btn = QPushButton('+')
+                self.add_master_btn.pressed.connect(self.create_master)
+                self.gridLayout.addWidget(self.add_master_btn, 0, (not_deleted_num - 1) * 2, 1, 1)
+                self.add_master_btn.show()
+            self.con.commit()
+            self.hide_all_master()
+            self.show_current_master_tags()
+            self.hide_all_tags()
+            self.show_current_tags()
+            self.update_web()
+
     def show_current_master_tags(self):
         g = 0
-
         for i in range(len(self.master_tags)):
             if not self.master_tags[i].is_deleted:
                 self.master_tags[i].show()
                 if g >= 1:
                     self.gridLayout.removeWidget(self.master_tags[i])
-                    self.gridLayout.addWidget(self.master_tags[i], 1, 2 * (i - g), 1, 2)
+                    self.gridLayout.addWidget(self.master_tags[i], 0, 2 * (i - g), 1, 2)
             else:
                 g += 1
-                # del self.master_tags[i]
+        not_deleted_num = sum([0 if i.is_deleted else 1 for i in self.master_tags])
+        if not_deleted_num < self.max_tag_count:  # создание кнопочки для добавления вкладки в текущий мастер
+            try:
+                self.add_master_btn.hide()
+            except Exception:
+                pass
+            self.add_master_btn = QPushButton('+')
+            self.gridLayout.addWidget(self.add_master_btn, 0, 2 * not_deleted_num, 1, 1)
+            self.add_master_btn.pressed.connect(self.create_master)
+        else:
+            self.add_master_btn.hide()
 
     def delete_master(self):
-        not_deleted_tag = sum([0 if i.is_deleted else 1 for i in self.master_tags[self.sender().index]])
+        # print(self.master_tags[self.sender().index])
+        not_deleted_tag = sum([0 if i.is_deleted else 1 for i in self.master_tags])
         if not_deleted_tag > 1:
             self.master_tags[self.sender().index].is_deleted = True
             master_id = self.master_tags[self.sender().index].id
-            self.cur.execute("UPDATE Masters SET is_deleted=True WHERE id=?", (master_id, ))
+            tags = str(self.cur.execute("SELECT tags FROM Masters WHERE id=?", (master_id,)).fetchall()[0][0]).split(
+                ';')
+            for tag_id in tags:
+                self.cur.execute("DELETE FROM Tags WHERE id=?", (tag_id,))
+            self.cur.execute("UPDATE Masters SET is_deleted=1 WHERE id=?", (master_id,))
+            self.con.commit()
             self.show_current_master_tags()
-            self.current_master_index = 0   # брать из истории
+            self.current_master_index = 0  # брать из истории
             self.current_tag_index = 0  # тоже брать из истории ОБРАБАТЫВАТЬ ЗАКРЫТЫЕ ВКЛАДКИ
             self.hide_all_master()
             self.show_current_master_tags()
+            self.hide_all_tags()
+            self.show_current_tags()
+            try:
+                self.add_master_btn.hide()
+            except Exception:
+                pass
+            self.add_master_btn = QPushButton('+')
+            self.add_master_btn.pressed.connect(self.create_master)
+            not_deleted_num = sum([0 if i.is_deleted else 1 for i in self.master_tags])
+            self.gridLayout.addWidget(self.add_master_btn, 0, not_deleted_num * 2, 1, 1)
+            self.add_master_btn.show()
             self.site.setText(self.master_tags[self.current_master_index].tags[self.current_tag_index].url)
             self.update_web()
-
 
     def delete_all_current_tags(self):  # убираем все тэги из поля зрения пользователя
         for i in range(len(self.master_tags[self.current_master_index].tags)):
@@ -258,9 +346,6 @@ class MyWidget(QMainWindow, Ui_MainWindow):
 
     def show_current_tags(self):  # показываем тэги текущего мастер-тэга
         g = 0
-        # print(self.master_tags[0], [i.url + ' ' + str(i.is_deleted) for i in self.master_tags[0].tags])
-        # print(self.master_tags[1], [i.url + ' ' + str(i.is_deleted) for i in self.master_tags[1].tags])
-        # print(self.current_master_index)
         for i in range(len(self.master_tags[self.current_master_index].tags)):
             if not self.master_tags[self.current_master_index].tags[i].is_deleted:
                 self.master_tags[self.current_master_index].tags[i].show()
@@ -271,8 +356,6 @@ class MyWidget(QMainWindow, Ui_MainWindow):
                 g += 1
         deleted_num = sum([0 if i.is_deleted else 1 for i in self.master_tags[self.current_master_index].tags])
         if deleted_num < self.max_tag_count:  # создание кнопочки для добавления вкладки в текущий мастер
-            #   deleted_num = sum([1 if i.is_deleted else 0 for i in self.master_tags[self.current_master_index].tags])
-            #   print(deleted_num)
             try:
                 self.add_btn.hide()
             except Exception:
@@ -281,17 +364,22 @@ class MyWidget(QMainWindow, Ui_MainWindow):
             self.gridLayout.addWidget(self.add_btn, 1, 2 * deleted_num, 1, 1)
             self.add_btn.pressed.connect(self.create_tag)
 
-    # del self.master_tags[self.current_master_index].tags[i]
-
     def create_tag(self):
-        new_id = self.cur.execute("SELECT id FROM Tags ORDER BY id DESC LIMIT 1").fetchall()[0][0] + 1
-        print(new_id)
+        new_id = int(self.cur.execute("SELECT id FROM max_id").fetchall()[0][0]) + 1
+        # print(new_id)
+        self.cur.execute("UPDATE max_id SET id=?", (new_id,))
         self.master_tags[self.current_master_index].add_tag(Tag('google.com', new_id))
-        print('hello')
-        self.cur.execute("INSERT INTO Tags values (?, ?, ?)", (new_id, 'google.com', False, ))
-        print('here')
-        not_deleted_num = sum([0 if i.is_deleted else 1 for i in self.master_tags[self.current_master_index]])
-        self.current_tag_index = not_deleted_num - 1
+        self.cur.execute("INSERT INTO Tags VALUES (?, 'google.com', 0)", (new_id,))
+        master_id = self.master_tags[self.current_master_index].id
+        # print(master_id)
+        some_shit = str(self.cur.execute("SELECT tags FROM Masters WHERE id=?", (master_id,)).fetchall()[0][0])
+        # print(f'before {some_shit}', str(new_id))
+        # print(some_shit + ';' + str(new_id))
+        some_shit = some_shit + ';' + str(new_id)
+        # print(f' after {some_shit}')
+        self.cur.execute("UPDATE Masters SET tags=? WHERE id=?", (str(some_shit), master_id))
+        self.con.commit()
+        self.current_tag_index = len(self.master_tags[self.current_master_index].tags) - 1
         not_deleted_num = sum([0 if i.is_deleted else 1 for i in self.master_tags[self.current_master_index].tags])
         self.gridLayout.addWidget(self.master_tags[self.current_master_index].tags[-1], 1, 2 * (not_deleted_num - 1), 1,
                                   2)
@@ -303,10 +391,9 @@ class MyWidget(QMainWindow, Ui_MainWindow):
         self.master_tags[self.current_master_index].tags[self.current_tag_index].del_btn.index = self.current_tag_index
         self.master_tags[self.current_master_index].tags[
             self.current_tag_index].del_btn.master_index = self.current_master_index
+        # print('here')
         self.add_btn.hide()
-
         self.show_current_tags()
-        # fgprint('added')
         self.update_web()
 
     def make_all_tags(self):
@@ -359,12 +446,13 @@ class MyWidget(QMainWindow, Ui_MainWindow):
         self.update_web()
 
     def delete_tag(self):  # еще все индексы переназначить
-        print(self.sender().master_index)
+        # print(self.sender().master_index)
         deleted_num = sum([0 if i.is_deleted else 1 for i in self.master_tags[self.sender().master_index].tags])
         if deleted_num > 1:
             self.master_tags[self.sender().master_index].tags[self.sender().index].is_deleted = True
             tag_id = self.master_tags[self.sender().master_index].tags[self.sender().index].id
-            self.cur.execute("UPDATE Tags SET is_deleted=True WHERE id=?", (tag_id, ))
+            self.cur.execute("UPDATE Tags SET is_deleted=True WHERE id=?", (tag_id,))
+            self.con.commit()
             self.current_tag_index = 0  # брать из истории
             self.hide_all_tags()
             self.show_current_tags()
@@ -391,6 +479,9 @@ class MyWidget(QMainWindow, Ui_MainWindow):
         self.master_tags[self.current_master_index].tags[self.current_tag_index].url = new_url
         self.master_tags[self.current_master_index].tags[self.current_tag_index].tag_body.url = new_url
         self.master_tags[self.current_master_index].tags[self.current_tag_index].update_site_name()
+        tag_id = self.master_tags[self.current_master_index].tags[self.current_tag_index].id
+        self.cur.execute("UPDATE Tags SET url=? WHERE id=?", (new_url, tag_id,))
+        self.con.commit()
         self.site.setText(new_url)
 
     def undo_func(self):
